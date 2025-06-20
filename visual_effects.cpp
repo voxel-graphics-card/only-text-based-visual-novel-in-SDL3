@@ -7,56 +7,105 @@
 #include <ctime> // For time (to seed rand if not done globally)
 
 // Global state variables for screen shake
-static bool shakeactive = false;
+static bool shakeActive = false;
 static Uint64 shakeStartTime = 0;
 static Uint32 shakeDuration = 0;
 static float shakeIntensity = 0.0f;
-static float shakePhase = 0.0f; // For a smoother, oscillating shake
+static SDL_FPoint currentShakeOffset = {0.0f, 0.0f};
 
+// Global state variables for screen tear (NEW)
+static bool tearActive = false;
+static Uint64 tearStartTime = 0;
+static Uint32 tearDuration = 0;
+static float tearMaxOffsetX = 0.0f;
+static float tearLineDensity = 1.0f; // How quickly the tear line changes
+static float currentTearLineY = 0.0f; // The Y-coordinate where the tear occurs
+static float currentTearOffsetX = 0.0f; // The X-offset to apply below the tear line
+
+// --- Screen Shake Effect Implementations ---
 void initScreenShake(Uint32 durationMs, float intensity) {
     shakeStartTime = SDL_GetTicks();
-    shakeactive = true;
+    shakeActive = true;
     shakeDuration = durationMs;
     shakeIntensity = intensity;
-    shakePhase = 0.0f; // Reset phase for new shake
-    // Optionally seed rand here if not globally seeded in main or elsewhere
-    // srand((unsigned int)time(NULL)); // Better to seed once in main
-}
-
-SDL_FPoint getScreenShakeOffset() {
-    SDL_FPoint offset = {0.0f, 0.0f};
-    if (shakeDuration > 0 && SDL_GetTicks() < (shakeStartTime + shakeDuration)) {
-        // Calculate a decreasing intensity over time
-        float elapsed = (float)(SDL_GetTicks() - shakeStartTime);
-        float progress = elapsed / shakeDuration; // 0.0 to 1.0
-        float currentIntensity = shakeIntensity * (1.0f - progress); // Shake fades out
-
-        // Use a sin wave for a smoother, oscillating shake
-        // Add random component for less predictable motion
-        float angleX = shakePhase + ((float)rand() / RAND_MAX * 2.0f * M_PI); // Random phase offset
-        float angleY = shakePhase + ((float)rand() / RAND_MAX * 2.0f * M_PI); // Random phase offset
-
-        offset.x = SDL_sinf(angleX * 20.0f) * currentIntensity; // 20.0f makes it wobble faster
-        offset.y = SDL_cosf(angleY * 25.0f) * currentIntensity; // Different frequency for Y for more variation
-
-    } else {
-        shakeactive = false; // Ensure shake is deactivated
-        shakeDuration = 0; // End the shake if time is up
-    }
-    return offset;
+    currentShakeOffset = {0.0f, 0.0f}; // Reset
 }
 
 void updateScreenShake(Uint64 currentTicks) {
-    if (shakeactive && currentTicks >= (shakeStartTime + shakeDuration)) {
-        shakeactive = false; // Shake has ended
-        shakeDuration = 0; // Reset
-        shakeStartTime = 0; // Reset
-        shakeIntensity = 0.0f; // Reset
+    if (!shakeActive || currentTicks >= shakeStartTime + shakeDuration) {
+        currentShakeOffset = {0.0f, 0.0f}; // Stop shaking
+        shakeActive = false; // Ensure it's off
+        return;
     }
-    // Update phase for continuous oscillation, regardless of active status (can be useful for fading out)
-    shakePhase += 0.5f; // Adjust speed of oscillation
+
+    float elapsedRatio = (float)(currentTicks - shakeStartTime) / shakeDuration;
+    float currentIntensity = shakeIntensity * (1.0f - elapsedRatio); // Intensity fades out
+    currentIntensity = std::max(0.0f, currentIntensity);
+
+    // Random offset based on current intensity
+    currentShakeOffset.x = (float)rand() / RAND_MAX * (2.0f * currentIntensity) - currentIntensity;
+    currentShakeOffset.y = (float)rand() / RAND_MAX * (2.0f * currentIntensity) - currentIntensity;
 }
 
-bool isScreenShakeActive(){
-    return shakeactive;
+SDL_FPoint getScreenShakeOffset() {
+    return currentShakeOffset;
+}
+
+bool isScreenShakeActive() {
+    return shakeActive;
+}
+
+// --- Screen Tear Effect Implementations (NEW) ---
+void initScreenTear(Uint32 durationMs, float maxOffsetX, float density) {
+    tearStartTime = SDL_GetTicks();
+    tearActive = true;
+    tearDuration = durationMs;
+    tearMaxOffsetX = maxOffsetX;
+    tearLineDensity = density;
+    // Initialize tear line and offset to a random state
+    currentTearLineY = (float)rand() / RAND_MAX * 720.0f; // Random Y within window height (assuming 720)
+    currentTearOffsetX = (float)rand() / RAND_MAX * (2.0f * tearMaxOffsetX) - tearMaxOffsetX;
+}
+
+void updateScreenTear(Uint64 currentTicks) {
+    if (!tearActive || currentTicks >= tearStartTime + tearDuration) {
+        tearActive = false; // Deactivate tear
+        currentTearLineY = 0.0f; // Reset to default
+        currentTearOffsetX = 0.0f; // Reset to default
+        return;
+    }
+
+    // Adjust tear line and offset over time for dynamic effect
+    float elapsedRatio = (float)(currentTicks - tearStartTime) / tearDuration;
+
+    // Make the tear offset decay over time
+    float dynamicMaxOffset = tearMaxOffsetX * (1.0f - elapsedRatio);
+    dynamicMaxOffset = std::max(0.0f, dynamicMaxOffset); // Ensure it doesn't go negative
+
+    // Randomly update the tear line and offset based on density
+    // Higher density means more frequent and larger jumps
+    // We'll use a simple threshold to decide when to change
+    if ((float)rand() / RAND_MAX < tearLineDensity * 0.1f) { // 10% chance per frame to change tear parameters
+        // Randomize the tear line Y-position within a reasonable screen range
+        // Assuming typical window height, adjust as needed.
+        currentTearLineY = (float)rand() / RAND_MAX * 720.0f; // Example: Random Y from 0 to 720
+
+        // Randomize the offset within the dynamic max offset
+        currentTearOffsetX = (float)rand() / RAND_MAX * (2.0f * dynamicMaxOffset) - dynamicMaxOffset;
+    }
+}
+
+float getScreenTearXOffset(float yPosition) {
+    if (!tearActive) {
+        return 0.0f;
+    }
+    // If the element's Y position is below the current tear line, apply the offset
+    if (yPosition >= currentTearLineY) {
+        return currentTearOffsetX;
+    }
+    return 0.0f; // No offset if above the tear line
+}
+
+bool isScreenTearActive() {
+    return tearActive;
 }
